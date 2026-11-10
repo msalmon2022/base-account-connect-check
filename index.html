@@ -27,11 +27,11 @@
 <main>
   <div class="mark" aria-hidden="true">B</div>
   <h1>Base Account connection check</h1>
-  <p>This page checks whether your browser wallet can connect and whether it is on Base Mainnet. It does not request a signature or permission to move funds.</p>
+  <p>This version uses the official Base Account SDK connection flow rather than relying on a wallet extension injected into Chrome. It checks your wallet address and Base Mainnet network.</p>
   <button id="connect" type="button">Connect Base Account</button>
   <section class="panel" aria-live="polite">
     <div class="label">Connection status</div>
-    <div class="value" id="status">Not connected. Select the button to request a wallet connection.</div>
+    <div class="value" id="status">Loading the official Base Account SDK…</div>
   </section>
   <section class="panel">
     <div class="label">Connected wallet</div>
@@ -46,63 +46,63 @@
     <div class="value" id="comparison">Waiting for connection.</div>
   </section>
   <div class="notice">
-    <p><strong>Safety:</strong> This page only calls <code>eth_requestAccounts</code> and <code>eth_chainId</code>. It does not sign messages, create spend permissions, approve tokens, or submit transactions.</p>
-    <p>If your Base Account does not appear, your current browser may not expose it through the standard <code>window.ethereum</code> interface. This checker is a basic browser-provider test, not a full Base Account SDK integration.</p>
+    <p><strong>Safety:</strong> The button requests a wallet connection and reads the account and network only. It does not sign a message, create spend permissions, approve tokens, or submit transactions.</p>
+    <p>If the connection flow offers a passkey or Base Account prompt, review it in your Base wallet. Do not share your recovery phrase or private keys with this page or anyone.</p>
   </div>
 </main>
-<script>
-(() => {
-  const EXPECTED_ADDRESS = "0x49730Bde4D92d24C7b25Fb03bcB47c6593605789".toLowerCase();
-  const BASE_CHAIN_ID = "0x2105";
-  const button = document.getElementById("connect");
-  const status = document.getElementById("status");
-  const address = document.getElementById("address");
-  const network = document.getElementById("network");
-  const comparison = document.getElementById("comparison");
-  const setStatus = (message, kind) => {
-    status.textContent = message;
-    status.className = "value " + (kind || "");
-  };
-  button.addEventListener("click", async () => {
-    if (!window.ethereum || typeof window.ethereum.request !== "function") {
-      setStatus("No compatible injected wallet provider was detected in this browser.", "warn");
-      address.textContent = "—";
-      network.textContent = "—";
-      comparison.textContent = "Cannot compare until a wallet provider is available.";
-      return;
+<script type="module">
+const EXPECTED_ADDRESS = "0x49730Bde4D92d24C7b25Fb03bcB47c6593605789".toLowerCase();
+const BASE_CHAIN_ID = "0x2105";
+const button = document.getElementById("connect");
+const status = document.getElementById("status");
+const address = document.getElementById("address");
+const network = document.getElementById("network");
+const comparison = document.getElementById("comparison");
+let provider = null;
+const setStatus = (message, kind = "") => {
+  status.textContent = message;
+  status.className = "value " + kind;
+};
+try {
+  const { createBaseAccountSDK } = await import("https://esm.sh/@base-org/account");
+  const sdk = createBaseAccountSDK({ appName: "Base Account Connection Check" });
+  provider = sdk.getProvider();
+  setStatus("Ready. Select Connect Base Account to open the official connection flow.");
+} catch (error) {
+  const message = error && typeof error.message === "string" ? error.message : "SDK could not be loaded.";
+  setStatus("Could not load the Base Account SDK: " + message, "bad");
+}
+button.addEventListener("click", async () => {
+  if (!provider) {
+    setStatus("The Base Account SDK did not load. Refresh the page and try again.", "bad");
+    return;
+  }
+  button.disabled = true;
+  setStatus("Waiting for Base Account connection approval…");
+  try {
+    const accounts = await provider.request({ method: "eth_requestAccounts" });
+    if (!Array.isArray(accounts) || accounts.length === 0) {
+      throw new Error("The wallet did not return an account.");
     }
-    button.disabled = true;
-    setStatus("Waiting for wallet connection approval…");
-    try {
-      const accounts = await window.ethereum.request({ method: "eth_requestAccounts" });
-      if (!Array.isArray(accounts) || accounts.length === 0) {
-        throw new Error("The wallet did not return an account.");
-      }
-      const chainId = await window.ethereum.request({ method: "eth_chainId" });
-      const connected = String(accounts[0]);
-      const onBase = String(chainId).toLowerCase() === BASE_CHAIN_ID;
-      const matches = connected.toLowerCase() === EXPECTED_ADDRESS;
-      address.textContent = connected;
-      network.textContent = onBase ? "Base Mainnet (chain ID 8453)" : "Other network (chain ID " + String(chainId) + ")";
-      comparison.textContent = matches ? "Matches the configured wallet address." : "Does not match the configured wallet address.";
-      comparison.className = "value " + (matches ? "good" : "warn");
-      if (onBase && matches) {
-        setStatus("Connected. Wallet address and Base Mainnet both match.", "good");
-      } else if (!onBase && !matches) {
-        setStatus("Connected, but both the network and wallet address differ from the configured values.", "warn");
-      } else if (!onBase) {
-        setStatus("Wallet address matches, but the wallet is not on Base Mainnet.", "warn");
-      } else {
-        setStatus("On Base Mainnet, but the connected address differs from the configured wallet.", "warn");
-      }
-    } catch (error) {
-      const message = error && typeof error.message === "string" ? error.message : "Wallet connection was not completed.";
-      setStatus(message, "bad");
-    } finally {
-      button.disabled = false;
-    }
-  });
-})();
+    const chainId = await provider.request({ method: "eth_chainId" });
+    const connected = String(accounts[0]);
+    const onBase = String(chainId).toLowerCase() === BASE_CHAIN_ID;
+    const matches = connected.toLowerCase() === EXPECTED_ADDRESS;
+    address.textContent = connected;
+    network.textContent = onBase ? "Base Mainnet (chain ID 8453)" : "Other network (chain ID " + String(chainId) + ")";
+    comparison.textContent = matches ? "Matches the configured wallet address." : "Does not match the configured wallet address.";
+    comparison.className = "value " + (matches ? "good" : "warn");
+    if (onBase && matches) setStatus("Connected. Wallet address and Base Mainnet both match.", "good");
+    else if (!onBase && !matches) setStatus("Connected, but both the network and wallet address differ from the configured values.", "warn");
+    else if (!onBase) setStatus("Wallet address matches, but the wallet is not on Base Mainnet.", "warn");
+    else setStatus("On Base Mainnet, but the connected address differs from the configured wallet.", "warn");
+  } catch (error) {
+    const message = error && typeof error.message === "string" ? error.message : "Wallet connection was not completed.";
+    setStatus("Connection was not completed: " + message, "bad");
+  } finally {
+    button.disabled = false;
+  }
+});
 </script>
 </body>
 </html>
