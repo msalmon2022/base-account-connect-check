@@ -32,7 +32,8 @@
   <p>Connect your Coinbase Wallet, confirm the configured address and Base Mainnet, then read public USDC and vault balances from Base.</p>
   <button id="connect" type="button">Connect Wallet</button>
   <button id="switch" class="secondary" type="button" hidden>Switch to Base Mainnet</button>
-  <button id="audit" class="secondary" type="button" hidden>Run Read-only Wallet & Vault Check</button>
+  <button id="audit" class="secondary" type="button" hidden>Run Read-only Wallet Balance Check</button>
+  <button id="vaultState" class="secondary" type="button" hidden>Run Read-only Vault State Check</button>
   <section class="panel" aria-live="polite">
     <div class="label">Connection status</div>
     <div class="value" id="status">Loading the official Coinbase Wallet SDK…</div>
@@ -50,8 +51,12 @@
     <div class="value" id="comparison">Waiting for connection.</div>
   </section>
   <section class="panel">
-    <div class="label">Read-only onchain results</div>
+    <div class="label">Read-only wallet token balances</div>
     <div class="value" id="auditResult">Not run yet.</div>
+  </section>
+  <section class="panel">
+    <div class="label">Read-only vault state and limits</div>
+    <div class="value" id="vaultResult">Not run yet.</div>
   </section>
   <div class="notice">
     <p><strong>Safety:</strong> These checks only request the public account address and read public blockchain data. They do not sign messages, request spend permissions, approve tokens, build transactions, or transfer funds.</p>
@@ -69,11 +74,13 @@ const TOKENS = {
 const connectButton = document.getElementById("connect");
 const switchButton = document.getElementById("switch");
 const auditButton = document.getElementById("audit");
+const vaultStateButton = document.getElementById("vaultState");
 const status = document.getElementById("status");
 const address = document.getElementById("address");
 const network = document.getElementById("network");
 const comparison = document.getElementById("comparison");
 const auditResult = document.getElementById("auditResult");
+const vaultResult = document.getElementById("vaultResult");
 let provider = null;
 let connectedAddress = null;
 
@@ -118,6 +125,52 @@ async function readToken(token, user) {
   }
   return { label: token.label, symbol, balance: formatUnits(balance, decimals), raw: balance.toString(), decimals };
 }
+async function readVaultState(vault, user) {
+  const arg = user.slice(2).toLowerCase().padStart(64, "0");
+  const oneShare = (10n ** 18n).toString(16).padStart(64, "0");
+  const read = async (selector, args = "") => {
+    try { return { ok: true, value: await readUint(vault.address, selector, args) }; }
+    catch (error) { return { ok: false, error: error?.message || String(error) }; }
+  };
+  const [asset, totalAssets, totalSupply, maxDeposit, maxWithdraw, oneShareAssets, userShares, decimals, symbol] = await Promise.all([
+    read("0x38d52e0f"),
+    read("0x01e1d114"),
+    read("0x18160ddd"),
+    read("0x402d267d", arg),
+    read("0xce96cb77", arg),
+    read("0x07a2d13a", oneShare),
+    read("0x70a08231", arg),
+    read("0x313ce567"),
+    ethCall(vault.address, "0x95d89b41").catch(error => ({ error: error?.message || String(error) }))
+  ]);
+  const assetAddress = asset.ok ? "0x" + asset.value.toString(16).padStart(64, "0").slice(-40) : null;
+  const assetDecimals = 6;
+  const shareDecimals = decimals.ok ? Number(decimals.value) : vault.shareDecimalsFallback;
+  let tokenSymbol = vault.label;
+  if (typeof symbol === "string" && /^0x[0-9a-fA-F]{128,}$/.test(symbol)) {
+    try {
+      const offset = Number(BigInt("0x" + symbol.slice(2, 66))) * 2;
+      const length = Number(BigInt("0x" + symbol.slice(2 + offset, 2 + offset + 64)));
+      const hex = symbol.slice(2 + offset + 64, 2 + offset + 64 + length * 2);
+      const decoded = new TextDecoder().decode(Uint8Array.from(hex.match(/.{2}/g).map(x => parseInt(x, 16))));
+      if (decoded) tokenSymbol = decoded;
+    } catch {}
+  }
+  const fmt = (result, places) => result.ok ? formatUnits(result.value, places) : "READ FAILED: " + result.error;
+  return {
+    label: vault.label,
+    tokenSymbol,
+    assetAddress,
+    expectedAssetMatches: assetAddress?.toLowerCase() === TOKENS.USDC.address.toLowerCase(),
+    totalAssets: fmt(totalAssets, assetDecimals),
+    totalSupply: fmt(totalSupply, shareDecimals),
+    maxDeposit: fmt(maxDeposit, assetDecimals),
+    maxWithdraw: fmt(maxWithdraw, assetDecimals),
+    oneShareAssets: fmt(oneShareAssets, assetDecimals),
+    userShares: fmt(userShares, shareDecimals),
+    shareDecimals
+  };
+}
 async function refreshConnection() {
   const accounts = await provider.request({ method: "eth_accounts" });
   if (!Array.isArray(accounts) || accounts.length === 0) {
@@ -139,6 +192,7 @@ async function refreshConnection() {
   comparison.className = "value " + (matches ? "good" : "warn");
   switchButton.hidden = onBase;
   auditButton.hidden = !onBase;
+  vaultStateButton.hidden = !onBase;
   if (onBase && matches) setStatus("Connected. Wallet address and Base Mainnet match the configured setup.", "good");
   else if (!onBase && !matches) setStatus("Connected, but both the network and wallet address differ from the configured values.", "warn");
   else if (!onBase) setStatus("Wallet address matches, but the wallet is not on Base Mainnet.", "warn");
@@ -183,6 +237,47 @@ switchButton.addEventListener("click", async () => {
     else if (code === 4902) setStatus("This wallet did not recognize Base Mainnet. No network was added automatically.", "warn");
     else setStatus("Could not switch networks: " + message + ". No transaction was submitted.", "bad");
   } finally { switchButton.disabled = false; }
+});
+
+vaultStateButton.addEventListener("click", async () => {
+  if (!provider || !connectedAddress) { setStatus("Connect your wallet first.", "warn"); return; }
+  vaultStateButton.disabled = true;
+  vaultResult.textContent = "Reading both vault contracts directly on Base…";
+  setStatus("Checking vault assets, share prices, and account-specific limits. Read-only only.");
+  try {
+    const chainId = String(await provider.request({ method: "eth_chainId" })).toLowerCase();
+    if (chainId !== BASE_CHAIN_ID) throw new Error("Wallet is no longer on Base Mainnet.");
+    const accounts = await provider.request({ method: "eth_accounts" });
+    const user = String(accounts?.[0] || "");
+    if (!user || user.toLowerCase() !== connectedAddress.toLowerCase()) throw new Error("Connected account changed. Reconnect and retry.");
+    const vaults = [
+      { address: TOKENS.MORPHO.address, label: "Noon Ecosystem Vault V2 (Morpho)", shareDecimalsFallback: 18 },
+      { address: TOKENS.SPARK.address, label: "Spark Savings USDC sUSDC V1 (legacy)", shareDecimalsFallback: 18 }
+    ];
+    const results = await Promise.all(vaults.map(v => readVaultState(v, user)));
+    vaultResult.textContent = results.map(v =>
+      v.label +
+      "\\n  Share token: " + v.tokenSymbol +
+      "\\n  Underlying asset: " + (v.assetAddress || "READ FAILED") +
+      "\\n  Underlying matches Base USDC: " + v.expectedAssetMatches +
+      "\\n  Total assets (USDC): " + v.totalAssets +
+      "\\n  Total share supply: " + v.totalSupply +
+      "\\n  Your share balance: " + v.userShares +
+      "\\n  Max deposit for this wallet (USDC): " + v.maxDeposit +
+      "\\n  Max immediate withdraw for this wallet (USDC): " + v.maxWithdraw +
+      "\\n  Assets redeemable per 1 share: " + v.oneShareAssets +
+      "\\n  Share decimals: " + v.shareDecimals
+    ).join("\\n\\n") +
+    "\\n\\nWallet: " + user +
+    "\\nNetwork: Base Mainnet (8453)" +
+    "\\nMethod: eth_call only";
+    vaultResult.className = "value good";
+    setStatus("Vault state reads completed. Limits are contract-reported read-only values, not deposit authorization.", "good");
+  } catch (error) {
+    vaultResult.textContent = "Vault state check failed: " + (error?.message || String(error));
+    vaultResult.className = "value warn";
+    setStatus("The vault state check could not complete. No transaction was submitted.", "warn");
+  } finally { vaultStateButton.disabled = false; }
 });
 
 auditButton.addEventListener("click", async () => {
