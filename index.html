@@ -14,21 +14,24 @@
     h1 { margin: 18px 0 8px; font-size: clamp(25px, 5vw, 32px); letter-spacing: -.6px; }
     p { color: #b7c3d8; line-height: 1.6; }
     button { width: 100%; margin: 18px 0 12px; padding: 14px 18px; border: 0; border-radius: 12px; background: #3567ff; color: white; font-size: 16px; font-weight: 700; cursor: pointer; }
-    button:hover { background: #4b78ff; } button:disabled { opacity: .65; cursor: wait; }
+    button.secondary { background: #263b5c; border: 1px solid #52709b; }
+    button:hover { filter: brightness(1.12); } button:disabled { opacity: .65; cursor: wait; }
     .panel { margin-top: 14px; padding: 15px; border-radius: 12px; background: #0b1424; border: 1px solid #26364e; }
     .label { color: #8fa4c2; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
     .value { margin-top: 6px; overflow-wrap: anywhere; font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
     #status { min-height: 48px; }
     .notice { margin-top: 18px; padding-top: 16px; border-top: 1px solid #29364c; font-size: 13px; }
     .good { color: #75e0ad; } .warn { color: #ffd27a; } .bad { color: #ff9b9b; }
+    [hidden] { display: none !important; }
   </style>
 </head>
 <body>
 <main>
   <div class="mark" aria-hidden="true">B</div>
   <h1>Base Account connection check</h1>
-  <p>This version uses the official Base Account SDK connection flow rather than relying on a wallet extension injected into Chrome. It checks your wallet address and Base Mainnet network.</p>
-  <button id="connect" type="button">Connect Base Account</button>
+  <p>Connect your Coinbase Wallet/Base Account, check the address and network, and request a switch to Base Mainnet if needed.</p>
+  <button id="connect" type="button">Connect Wallet</button>
+  <button id="switch" class="secondary" type="button" hidden>Switch to Base Mainnet</button>
   <section class="panel" aria-live="polite">
     <div class="label">Connection status</div>
     <div class="value" id="status">Loading the official Base Account SDK…</div>
@@ -46,61 +49,105 @@
     <div class="value" id="comparison">Waiting for connection.</div>
   </section>
   <div class="notice">
-    <p><strong>Safety:</strong> The button requests a wallet connection and reads the account and network only. It does not sign a message, create spend permissions, approve tokens, or submit transactions.</p>
-    <p>If the connection flow offers a passkey or Base Account prompt, review it in your Base wallet. Do not share your recovery phrase or private keys with this page or anyone.</p>
+    <p><strong>Safety:</strong> Connect requests account access. Switch to Base requests only a network change. Neither button sends funds, signs a message, creates spend permissions, approves tokens, or submits a transaction.</p>
+    <p>If your wallet displays a network-switch confirmation, verify that it says Base Mainnet before approving. Never share your recovery phrase or private keys.</p>
   </div>
 </main>
 <script type="module">
 const EXPECTED_ADDRESS = "0x49730Bde4D92d24C7b25Fb03bcB47c6593605789".toLowerCase();
 const BASE_CHAIN_ID = "0x2105";
-const button = document.getElementById("connect");
+const connectButton = document.getElementById("connect");
+const switchButton = document.getElementById("switch");
 const status = document.getElementById("status");
 const address = document.getElementById("address");
 const network = document.getElementById("network");
 const comparison = document.getElementById("comparison");
 let provider = null;
+let connectedAddress = null;
+
 const setStatus = (message, kind = "") => {
   status.textContent = message;
   status.className = "value " + kind;
 };
+
+async function refreshConnection() {
+  const accounts = await provider.request({ method: "eth_accounts" });
+  if (!Array.isArray(accounts) || accounts.length === 0) {
+    connectedAddress = null;
+    address.textContent = "No wallet connected.";
+    network.textContent = "—";
+    comparison.textContent = "Connect a wallet to compare its address.";
+    switchButton.hidden = true;
+    return;
+  }
+  connectedAddress = String(accounts[0]);
+  const chainId = String(await provider.request({ method: "eth_chainId" })).toLowerCase();
+  const onBase = chainId === BASE_CHAIN_ID;
+  const matches = connectedAddress.toLowerCase() === EXPECTED_ADDRESS;
+  address.textContent = connectedAddress;
+  network.textContent = onBase ? "Base Mainnet (chain ID 8453 / 0x2105)" : "Other network (chain ID " + chainId + ")";
+  comparison.textContent = matches ? "Matches the configured wallet address." : "Does not match the configured wallet address.";
+  comparison.className = "value " + (matches ? "good" : "warn");
+  switchButton.hidden = onBase;
+  if (onBase && matches) setStatus("Connected. Wallet address and Base Mainnet both match.", "good");
+  else if (!onBase && !matches) setStatus("Connected, but both the network and wallet address differ from the configured values.", "warn");
+  else if (!onBase) setStatus("Wallet address matches, but the wallet is not on Base Mainnet.", "warn");
+  else setStatus("On Base Mainnet, but the connected address differs from the configured wallet.", "warn");
+}
+
 try {
   const { createBaseAccountSDK } = await import("https://esm.sh/@base-org/account");
   const sdk = createBaseAccountSDK({ appName: "Base Account Connection Check" });
   provider = sdk.getProvider();
-  setStatus("Ready. Select Connect Base Account to open the official connection flow.");
+  setStatus("Ready. Connect your wallet to check its address and network.");
 } catch (error) {
   const message = error && typeof error.message === "string" ? error.message : "SDK could not be loaded.";
   setStatus("Could not load the Base Account SDK: " + message, "bad");
 }
-button.addEventListener("click", async () => {
+
+connectButton.addEventListener("click", async () => {
   if (!provider) {
-    setStatus("The Base Account SDK did not load. Refresh the page and try again.", "bad");
+    setStatus("The wallet SDK did not load. Refresh the page and try again.", "bad");
     return;
   }
-  button.disabled = true;
-  setStatus("Waiting for Base Account connection approval…");
+  connectButton.disabled = true;
+  setStatus("Waiting for wallet connection approval…");
   try {
     const accounts = await provider.request({ method: "eth_requestAccounts" });
-    if (!Array.isArray(accounts) || accounts.length === 0) {
-      throw new Error("The wallet did not return an account.");
-    }
-    const chainId = await provider.request({ method: "eth_chainId" });
-    const connected = String(accounts[0]);
-    const onBase = String(chainId).toLowerCase() === BASE_CHAIN_ID;
-    const matches = connected.toLowerCase() === EXPECTED_ADDRESS;
-    address.textContent = connected;
-    network.textContent = onBase ? "Base Mainnet (chain ID 8453)" : "Other network (chain ID " + String(chainId) + ")";
-    comparison.textContent = matches ? "Matches the configured wallet address." : "Does not match the configured wallet address.";
-    comparison.className = "value " + (matches ? "good" : "warn");
-    if (onBase && matches) setStatus("Connected. Wallet address and Base Mainnet both match.", "good");
-    else if (!onBase && !matches) setStatus("Connected, but both the network and wallet address differ from the configured values.", "warn");
-    else if (!onBase) setStatus("Wallet address matches, but the wallet is not on Base Mainnet.", "warn");
-    else setStatus("On Base Mainnet, but the connected address differs from the configured wallet.", "warn");
+    if (!Array.isArray(accounts) || accounts.length === 0) throw new Error("The wallet did not return an account.");
+    await refreshConnection();
   } catch (error) {
     const message = error && typeof error.message === "string" ? error.message : "Wallet connection was not completed.";
     setStatus("Connection was not completed: " + message, "bad");
   } finally {
-    button.disabled = false;
+    connectButton.disabled = false;
+  }
+});
+
+switchButton.addEventListener("click", async () => {
+  if (!provider || !connectedAddress) {
+    setStatus("Connect your wallet first, then request the network switch.", "warn");
+    return;
+  }
+  switchButton.disabled = true;
+  setStatus("Requesting a switch to Base Mainnet. Confirm the network change in your wallet if prompted…");
+  try {
+    await provider.request({
+      method: "wallet_switchEthereumChain",
+      params: [{ chainId: BASE_CHAIN_ID }]
+    });
+    await refreshConnection();
+    const chainId = String(await provider.request({ method: "eth_chainId" })).toLowerCase();
+    if (chainId === BASE_CHAIN_ID) setStatus("Successfully connected to Base Mainnet. Check the wallet address comparison before proceeding.", "good");
+    else setStatus("The wallet did not switch to Base Mainnet. Current chain ID: " + chainId, "warn");
+  } catch (error) {
+    const code = error && error.code;
+    const message = error && typeof error.message === "string" ? error.message : "Network switch was not completed.";
+    if (code === 4001) setStatus("You declined the network switch. No transaction was made.", "warn");
+    else if (code === 4902) setStatus("This wallet did not recognize Base Mainnet for this connection. No network was added automatically and no transaction was made.", "warn");
+    else setStatus("Could not switch networks: " + message + ". No transaction was submitted.", "bad");
+  } finally {
+    switchButton.disabled = false;
   }
 });
 </script>
