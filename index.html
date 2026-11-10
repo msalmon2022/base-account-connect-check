@@ -4,22 +4,22 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#101828">
-  <title>Base Account Connection Check</title>
+  <title>Base Wallet Read-only Check</title>
   <style>
     :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
     * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; background: #0b1220; color: #eef2ff; }
-    main { width: min(100%, 560px); padding: 30px; border: 1px solid #29364c; border-radius: 20px; background: #111c2e; box-shadow: 0 24px 70px #0006; }
+    body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 20px; background: #0b1220; color: #eef2ff; }
+    main { width: min(100%, 620px); padding: 26px; border: 1px solid #29364c; border-radius: 20px; background: #111c2e; box-shadow: 0 24px 70px #0006; }
     .mark { display: inline-grid; place-items: center; width: 42px; height: 42px; border-radius: 13px; background: #2457f5; font-weight: 800; font-size: 22px; }
-    h1 { margin: 18px 0 8px; font-size: clamp(25px, 5vw, 32px); letter-spacing: -.6px; }
+    h1 { margin: 18px 0 8px; font-size: clamp(24px, 5vw, 32px); letter-spacing: -.6px; }
     p { color: #b7c3d8; line-height: 1.6; }
-    button { width: 100%; margin: 18px 0 12px; padding: 14px 18px; border: 0; border-radius: 12px; background: #3567ff; color: white; font-size: 16px; font-weight: 700; cursor: pointer; }
+    button { width: 100%; margin: 12px 0 6px; padding: 14px 18px; border: 0; border-radius: 12px; background: #3567ff; color: white; font-size: 16px; font-weight: 700; cursor: pointer; }
     button.secondary { background: #263b5c; border: 1px solid #52709b; }
     button:hover { filter: brightness(1.12); } button:disabled { opacity: .65; cursor: wait; }
     .panel { margin-top: 14px; padding: 15px; border-radius: 12px; background: #0b1424; border: 1px solid #26364e; }
     .label { color: #8fa4c2; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; }
-    .value { margin-top: 6px; overflow-wrap: anywhere; font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
-    #status { min-height: 48px; }
+    .value { margin-top: 6px; overflow-wrap: anywhere; font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; }
+    #status { min-height: 42px; }
     .notice { margin-top: 18px; padding-top: 16px; border-top: 1px solid #29364c; font-size: 13px; }
     .good { color: #75e0ad; } .warn { color: #ffd27a; } .bad { color: #ff9b9b; }
     [hidden] { display: none !important; }
@@ -28,13 +28,14 @@
 <body>
 <main>
   <div class="mark" aria-hidden="true">B</div>
-  <h1>Base Account connection check</h1>
-  <p>Connect your Coinbase Wallet/Base Account, check the address and network, and request a switch to Base Mainnet if needed.</p>
+  <h1>Base Wallet Read-only Check</h1>
+  <p>Connect your Coinbase Wallet, confirm the configured address and Base Mainnet, then read public USDC and vault balances from Base.</p>
   <button id="connect" type="button">Connect Wallet</button>
   <button id="switch" class="secondary" type="button" hidden>Switch to Base Mainnet</button>
+  <button id="audit" class="secondary" type="button" hidden>Run Read-only Wallet & Vault Check</button>
   <section class="panel" aria-live="polite">
     <div class="label">Connection status</div>
-    <div class="value" id="status">Loading the official Base Account SDK…</div>
+    <div class="value" id="status">Loading the official Coinbase Wallet SDK…</div>
   </section>
   <section class="panel">
     <div class="label">Connected wallet</div>
@@ -48,20 +49,31 @@
     <div class="label">Configured wallet comparison</div>
     <div class="value" id="comparison">Waiting for connection.</div>
   </section>
+  <section class="panel">
+    <div class="label">Read-only onchain results</div>
+    <div class="value" id="auditResult">Not run yet.</div>
+  </section>
   <div class="notice">
-    <p><strong>Safety:</strong> Connect requests account access. Switch to Base requests only a network change. Neither button sends funds, signs a message, creates spend permissions, approves tokens, or submits a transaction.</p>
-    <p>If your wallet displays a network-switch confirmation, verify that it says Base Mainnet before approving. Never share your recovery phrase or private keys.</p>
+    <p><strong>Safety:</strong> These checks only request the public account address and read public blockchain data. They do not sign messages, request spend permissions, approve tokens, build transactions, or transfer funds.</p>
+    <p>Never share your recovery phrase or private keys. If a wallet prompt asks you to sign, approve, or send anything, cancel it.</p>
   </div>
 </main>
 <script type="module">
-const EXPECTED_ADDRESS = "0x49730Bde4D92d24C7b25Fb03bcB47c6593605789".toLowerCase();
+const EXPECTED_ADDRESS = "0x177D739935664B6eE0B368e8add1E17cD75336F5".toLowerCase();
 const BASE_CHAIN_ID = "0x2105";
+const TOKENS = {
+  USDC: { address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", label: "Base USDC", decimalsFallback: 6 },
+  MORPHO: { address: "0x8B12106a70FE2F8bB255F691f1CF9a9ccfB278AF", label: "Noon Ecosystem Vault V2 shares", decimalsFallback: 6 },
+  SPARK: { address: "0x3128a0F7f0ea68E7B7c9B00AFa7E41045828e858", label: "Spark sUSDC shares", decimalsFallback: 18 }
+};
 const connectButton = document.getElementById("connect");
 const switchButton = document.getElementById("switch");
+const auditButton = document.getElementById("audit");
 const status = document.getElementById("status");
 const address = document.getElementById("address");
 const network = document.getElementById("network");
 const comparison = document.getElementById("comparison");
+const auditResult = document.getElementById("auditResult");
 let provider = null;
 let connectedAddress = null;
 
@@ -69,7 +81,43 @@ const setStatus = (message, kind = "") => {
   status.textContent = message;
   status.className = "value " + kind;
 };
-
+const word = (value) => BigInt(value).toString(16).padStart(64, "0");
+const decodeUint = (raw) => {
+  if (typeof raw !== "string" || !/^0x[0-9a-fA-F]{64}$/.test(raw)) throw new Error("Unexpected uint response");
+  return BigInt(raw);
+};
+const formatUnits = (raw, decimals) => {
+  const base = 10n ** BigInt(decimals);
+  const whole = raw / base;
+  const fraction = (raw % base).toString().padStart(decimals, "0").replace(/0+$/, "");
+  return fraction ? whole.toString() + "." + fraction : whole.toString();
+};
+async function ethCall(to, data) {
+  return await provider.request({ method: "eth_call", params: [{ to, data }, "latest"] });
+}
+async function readUint(to, selector, args = "") {
+  return decodeUint(await ethCall(to, selector + args));
+}
+async function readToken(token, user) {
+  const [balance, decimalsResult, symbolResult] = await Promise.all([
+    readUint(token.address, "0x70a08231" + user.slice(2).toLowerCase().padStart(64, "0")),
+    readUint(token.address, "0x313ce567").catch(() => BigInt(token.decimalsFallback)),
+    ethCall(token.address, "0x95d89b41").catch(() => null)
+  ]);
+  let decimals = Number(decimalsResult);
+  if (!Number.isInteger(decimals) || decimals < 0 || decimals > 36) decimals = token.decimalsFallback;
+  let symbol = token.label;
+  if (typeof symbolResult === "string" && /^0x[0-9a-fA-F]{128,}$/.test(symbolResult)) {
+    try {
+      const offset = Number(BigInt("0x" + symbolResult.slice(2, 66))) * 2;
+      const length = Number(BigInt("0x" + symbolResult.slice(2 + offset, 2 + offset + 64)));
+      const hex = symbolResult.slice(2 + offset + 64, 2 + offset + 64 + length * 2);
+      const decoded = new TextDecoder().decode(Uint8Array.from(hex.match(/.{2}/g).map(x => parseInt(x, 16))));
+      if (decoded) symbol = decoded;
+    } catch {}
+  }
+  return { label: token.label, symbol, balance: formatUnits(balance, decimals), raw: balance.toString(), decimals };
+}
 async function refreshConnection() {
   const accounts = await provider.request({ method: "eth_accounts" });
   if (!Array.isArray(accounts) || accounts.length === 0) {
@@ -78,6 +126,7 @@ async function refreshConnection() {
     network.textContent = "—";
     comparison.textContent = "Connect a wallet to compare its address.";
     switchButton.hidden = true;
+    auditButton.hidden = true;
     return;
   }
   connectedAddress = String(accounts[0]);
@@ -89,7 +138,8 @@ async function refreshConnection() {
   comparison.textContent = matches ? "Matches the configured wallet address." : "Does not match the configured wallet address.";
   comparison.className = "value " + (matches ? "good" : "warn");
   switchButton.hidden = onBase;
-  if (onBase && matches) setStatus("Connected. Wallet address and Base Mainnet both match.", "good");
+  auditButton.hidden = !onBase;
+  if (onBase && matches) setStatus("Connected. Wallet address and Base Mainnet match the configured setup.", "good");
   else if (!onBase && !matches) setStatus("Connected, but both the network and wallet address differ from the configured values.", "warn");
   else if (!onBase) setStatus("Wallet address matches, but the wallet is not on Base Mainnet.", "warn");
   else setStatus("On Base Mainnet, but the connected address differs from the configured wallet.", "warn");
@@ -97,19 +147,16 @@ async function refreshConnection() {
 
 try {
   const { createBaseAccountSDK } = await import("https://esm.sh/@base-org/account");
-  const sdk = createBaseAccountSDK({ appName: "Base Account Connection Check" });
+  const sdk = createBaseAccountSDK({ appName: "Base Wallet Read-only Check" });
   provider = sdk.getProvider();
-  setStatus("Ready. Connect your wallet to check its address and network.");
+  setStatus("Ready. Connect your wallet to verify its address and network.");
 } catch (error) {
   const message = error && typeof error.message === "string" ? error.message : "SDK could not be loaded.";
-  setStatus("Could not load the Base Account SDK: " + message, "bad");
+  setStatus("Could not load the Coinbase Wallet SDK: " + message, "bad");
 }
 
 connectButton.addEventListener("click", async () => {
-  if (!provider) {
-    setStatus("The wallet SDK did not load. Refresh the page and try again.", "bad");
-    return;
-  }
+  if (!provider) { setStatus("The wallet SDK did not load. Refresh the page and try again.", "bad"); return; }
   connectButton.disabled = true;
   setStatus("Waiting for wallet connection approval…");
   try {
@@ -119,36 +166,47 @@ connectButton.addEventListener("click", async () => {
   } catch (error) {
     const message = error && typeof error.message === "string" ? error.message : "Wallet connection was not completed.";
     setStatus("Connection was not completed: " + message, "bad");
-  } finally {
-    connectButton.disabled = false;
-  }
+  } finally { connectButton.disabled = false; }
 });
 
 switchButton.addEventListener("click", async () => {
-  if (!provider || !connectedAddress) {
-    setStatus("Connect your wallet first, then request the network switch.", "warn");
-    return;
-  }
+  if (!provider || !connectedAddress) { setStatus("Connect your wallet first, then request the network switch.", "warn"); return; }
   switchButton.disabled = true;
-  setStatus("Requesting a switch to Base Mainnet. Confirm the network change in your wallet if prompted…");
+  setStatus("Requesting a switch to Base Mainnet. Confirm only the network change in your wallet…");
   try {
-    await provider.request({
-      method: "wallet_switchEthereumChain",
-      params: [{ chainId: BASE_CHAIN_ID }]
-    });
+    await provider.request({ method: "wallet_switchEthereumChain", params: [{ chainId: BASE_CHAIN_ID }] });
     await refreshConnection();
-    const chainId = String(await provider.request({ method: "eth_chainId" })).toLowerCase();
-    if (chainId === BASE_CHAIN_ID) setStatus("Successfully connected to Base Mainnet. Check the wallet address comparison before proceeding.", "good");
-    else setStatus("The wallet did not switch to Base Mainnet. Current chain ID: " + chainId, "warn");
   } catch (error) {
     const code = error && error.code;
     const message = error && typeof error.message === "string" ? error.message : "Network switch was not completed.";
     if (code === 4001) setStatus("You declined the network switch. No transaction was made.", "warn");
-    else if (code === 4902) setStatus("This wallet did not recognize Base Mainnet for this connection. No network was added automatically and no transaction was made.", "warn");
+    else if (code === 4902) setStatus("This wallet did not recognize Base Mainnet. No network was added automatically.", "warn");
     else setStatus("Could not switch networks: " + message + ". No transaction was submitted.", "bad");
-  } finally {
-    switchButton.disabled = false;
-  }
+  } finally { switchButton.disabled = false; }
+});
+
+auditButton.addEventListener("click", async () => {
+  if (!provider || !connectedAddress) { setStatus("Connect your wallet first.", "warn"); return; }
+  auditButton.disabled = true;
+  auditResult.textContent = "Reading public Base blockchain data…";
+  setStatus("Running read-only checks. No signatures or transactions are requested.");
+  try {
+    const chainId = String(await provider.request({ method: "eth_chainId" })).toLowerCase();
+    if (chainId !== BASE_CHAIN_ID) throw new Error("Wallet is no longer on Base Mainnet.");
+    const accounts = await provider.request({ method: "eth_accounts" });
+    const user = String(accounts?.[0] || "");
+    if (!user || user.toLowerCase() !== connectedAddress.toLowerCase()) throw new Error("Connected account changed. Reconnect and retry.");
+    const results = await Promise.all(Object.values(TOKENS).map(token => readToken(token, user)));
+    const output = results.map(item => item.label + "\n  Token: " + item.symbol + "\n  Wallet balance: " + item.balance + "\n  Token decimals: " + item.decimals).join("\n\n");
+    auditResult.textContent = output + "\n\nWallet: " + user + "\nNetwork: Base Mainnet (8453)\nMethod: eth_call only";
+    auditResult.className = "value good";
+    setStatus("Read-only wallet checks completed. These are token balances, not a signing or transaction test.", "good");
+  } catch (error) {
+    const message = error && typeof error.message === "string" ? error.message : String(error);
+    auditResult.textContent = "Read-only check failed: " + message;
+    auditResult.className = "value warn";
+    setStatus("The read-only check could not complete. No transaction was submitted.", "warn");
+  } finally { auditButton.disabled = false; }
 });
 </script>
 </body>
