@@ -257,20 +257,20 @@ vaultStateButton.addEventListener("click", async () => {
     const results = await Promise.all(vaults.map(v => readVaultState(v, user)));
     vaultResult.textContent = results.map(v =>
       v.label +
-      "\\n  Share token: " + v.tokenSymbol +
-      "\\n  Underlying asset: " + (v.assetAddress || "READ FAILED") +
-      "\\n  Underlying matches Base USDC: " + v.expectedAssetMatches +
-      "\\n  Total assets (USDC): " + v.totalAssets +
-      "\\n  Total share supply: " + v.totalSupply +
-      "\\n  Your share balance: " + v.userShares +
-      "\\n  Max deposit for this wallet (USDC): " + v.maxDeposit +
-      "\\n  Max immediate withdraw for this wallet (USDC): " + v.maxWithdraw +
-      "\\n  Assets redeemable per 1 share: " + v.oneShareAssets +
-      "\\n  Share decimals: " + v.shareDecimals
-    ).join("\\n\\n") +
-    "\\n\\nWallet: " + user +
-    "\\nNetwork: Base Mainnet (8453)" +
-    "\\nMethod: eth_call only";
+      "\n  Share token: " + v.tokenSymbol +
+      "\n  Underlying asset: " + (v.assetAddress || "READ FAILED") +
+      "\n  Underlying matches Base USDC: " + v.expectedAssetMatches +
+      "\n  Total assets (USDC): " + v.totalAssets +
+      "\n  Total share supply: " + v.totalSupply +
+      "\n  Your share balance: " + v.userShares +
+      "\n  Max deposit for this wallet (USDC): " + v.maxDeposit +
+      "\n  Max immediate withdraw for this wallet (USDC): " + v.maxWithdraw +
+      "\n  Assets redeemable per 1 share: " + v.oneShareAssets +
+      "\n  Share decimals: " + v.shareDecimals
+    ).join("\n\n") +
+    "\n\nWallet: " + user +
+    "\nNetwork: Base Mainnet (8453)" +
+    "\nMethod: eth_call only";
     vaultResult.className = "value good";
     setStatus("Vault state reads completed. Limits are contract-reported read-only values, not deposit authorization.", "good");
   } catch (error) {
