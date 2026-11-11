@@ -34,6 +34,8 @@
   <button id="switch" class="secondary" type="button" hidden>Switch to Base Mainnet</button>
   <button id="audit" class="secondary" type="button" hidden>Run Read-only Wallet Balance Check</button>
   <button id="vaultState" class="secondary" type="button" hidden>Run Read-only Vault State Check</button>
+  <button id="listSubAccounts" class="secondary" type="button" hidden>Check App Subaccounts</button>
+  <button id="createSubAccount" class="secondary" type="button" hidden>Create Empty App Subaccount</button>
   <section class="panel" aria-live="polite">
     <div class="label">Connection status</div>
     <div class="value" id="status">Loading the official Coinbase Wallet SDK…</div>
@@ -58,8 +60,12 @@
     <div class="label">Read-only vault state and limits</div>
     <div class="value" id="vaultResult">Not run yet.</div>
   </section>
+  <section class="panel">
+    <div class="label">App subaccount status</div>
+    <div class="value" id="subAccountResult">Not checked. Creating an empty app subaccount does not fund it or grant spending permission.</div>
+  </section>
   <div class="notice">
-    <p><strong>Safety:</strong> These checks only request the public account address and read public blockchain data. They do not sign messages, request spend permissions, approve tokens, build transactions, or transfer funds.</p>
+    <p><strong>Safety:</strong> Balance and vault checks only read public blockchain data. The optional app-subaccount creation asks Coinbase Wallet to create an empty app-specific account. It does not fund that account, request spend permissions, approve tokens, or transfer funds. Do not approve any prompt that requests token spending or a transfer.</p>
     <p>Never share your recovery phrase or private keys. If a wallet prompt asks you to sign, approve, or send anything, cancel it.</p>
   </div>
 </main>
@@ -75,12 +81,15 @@ const connectButton = document.getElementById("connect");
 const switchButton = document.getElementById("switch");
 const auditButton = document.getElementById("audit");
 const vaultStateButton = document.getElementById("vaultState");
+const listSubAccountsButton = document.getElementById("listSubAccounts");
+const createSubAccountButton = document.getElementById("createSubAccount");
 const status = document.getElementById("status");
 const address = document.getElementById("address");
 const network = document.getElementById("network");
 const comparison = document.getElementById("comparison");
 const auditResult = document.getElementById("auditResult");
 const vaultResult = document.getElementById("vaultResult");
+const subAccountResult = document.getElementById("subAccountResult");
 let provider = null;
 let connectedAddress = null;
 
@@ -193,6 +202,8 @@ async function refreshConnection() {
   switchButton.hidden = onBase;
   auditButton.hidden = !onBase;
   vaultStateButton.hidden = !onBase;
+  listSubAccountsButton.hidden = !onBase || !matches;
+  createSubAccountButton.hidden = !onBase || !matches;
   if (onBase && matches) setStatus("Connected. Wallet address and Base Mainnet match the configured setup.", "good");
   else if (!onBase && !matches) setStatus("Connected, but both the network and wallet address differ from the configured values.", "warn");
   else if (!onBase) setStatus("Wallet address matches, but the wallet is not on Base Mainnet.", "warn");
@@ -200,7 +211,7 @@ async function refreshConnection() {
 }
 
 try {
-  const { createBaseAccountSDK } = await import("https://esm.sh/@base-org/account");
+  const { createBaseAccountSDK, getCryptoKeyAccount } = await import("https://esm.sh/@base-org/account");
   const sdk = createBaseAccountSDK({ appName: "Base Wallet Read-only Check" });
   provider = sdk.getProvider();
   setStatus("Ready. Connect your wallet to verify its address and network.");
@@ -278,6 +289,78 @@ vaultStateButton.addEventListener("click", async () => {
     vaultResult.className = "value warn";
     setStatus("The vault state check could not complete. No transaction was submitted.", "warn");
   } finally { vaultStateButton.disabled = false; }
+});
+
+
+listSubAccountsButton.addEventListener("click", async () => {
+  if (!provider || !connectedAddress) return;
+  listSubAccountsButton.disabled = true;
+  subAccountResult.textContent = "Checking app-specific subaccounts…";
+  try {
+    const chainId = String(await provider.request({ method: "eth_chainId" })).toLowerCase();
+    if (chainId !== BASE_CHAIN_ID) throw new Error("Wallet is no longer on Base Mainnet.");
+    const accounts = await provider.request({ method: "eth_accounts" });
+    if (String(accounts?.[0] || "").toLowerCase() !== EXPECTED_ADDRESS) {
+      throw new Error("Connected wallet does not match the configured owner address.");
+    }
+    const subAccounts = await provider.request({ method: "wallet_getSubAccounts" });
+    subAccountResult.textContent = JSON.stringify({
+      parentWallet: connectedAddress,
+      chainId: 8453,
+      subAccounts: Array.isArray(subAccounts) ? subAccounts : subAccounts,
+      fundingOrSpendPermissionRequested: false
+    }, null, 2);
+    subAccountResult.className = "value good";
+  } catch (error) {
+    subAccountResult.textContent = "Could not list app subaccounts: " + (error?.message || String(error));
+    subAccountResult.className = "value warn";
+  } finally { listSubAccountsButton.disabled = false; }
+});
+
+createSubAccountButton.addEventListener("click", async () => {
+  if (!provider || !connectedAddress) return;
+  const confirmed = window.confirm(
+    "Create an EMPTY app-specific subaccount under your connected Coinbase Wallet? This does not fund it or grant spending permission. Continue only if the wallet prompt is for creating an account—not spending or transferring tokens."
+  );
+  if (!confirmed) return;
+  createSubAccountButton.disabled = true;
+  subAccountResult.textContent = "Preparing an app-specific signer. No funds or permissions are being requested…";
+  try {
+    const chainId = String(await provider.request({ method: "eth_chainId" })).toLowerCase();
+    if (chainId !== BASE_CHAIN_ID) throw new Error("Switch to Base Mainnet first.");
+    const accounts = await provider.request({ method: "eth_accounts" });
+    if (String(accounts?.[0] || "").toLowerCase() !== EXPECTED_ADDRESS) {
+      throw new Error("Connected wallet does not match the configured owner address.");
+    }
+    const { account } = await getCryptoKeyAccount();
+    if (!account) throw new Error("The SDK could not access an app signer. No account was created.");
+    let key;
+    if (account.type === "webAuthn" || account.type === "webauthn") {
+      key = { type: "webauthn-p256", publicKey: account.publicKey };
+    } else if (account.type === "local" && account.address) {
+      key = { type: "address", publicKey: account.address };
+    } else {
+      throw new Error("Unsupported signer type returned by Coinbase Wallet SDK: " + String(account.type));
+    }
+    const created = await provider.request({
+      method: "wallet_addSubAccount",
+      params: [{
+        version: "1",
+        account: { type: "create", keys: [key] }
+      }]
+    });
+    subAccountResult.textContent = JSON.stringify({
+      status: "Wallet returned an app-subaccount creation response",
+      parentWallet: connectedAddress,
+      subAccount: created,
+      signerType: account.type,
+      note: "No funds were deposited. No spend permission, token approval, or transfer was requested."
+    }, null, 2);
+    subAccountResult.className = "value good";
+  } catch (error) {
+    subAccountResult.textContent = "App subaccount was not created: " + (error?.message || String(error)) + "\nNo token spending or transfer was requested by this page.";
+    subAccountResult.className = "value warn";
+  } finally { createSubAccountButton.disabled = false; }
 });
 
 auditButton.addEventListener("click", async () => {
